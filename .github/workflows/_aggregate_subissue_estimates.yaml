@@ -146,6 +146,106 @@ jobs:
               console.log(`Total estimate for Epic #${issueNumber}: ${totalEstimate}`);
               console.log(`Sum of all sub-issue estimates: ${totalEstimate}`);
               
+              // Epicのプロジェクトアイテムと(Epic)Estimateフィールドを取得
+              const epicProjectQuery = `
+                query($owner: String!, $repo: String!, $issue_number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $issue_number) {
+                      projectItems(first: 100) {
+                        nodes {
+                          id
+                          project {
+                            id
+                          }
+                          fieldValues(first: 100) {
+                            nodes {
+                              ... on ProjectV2ItemFieldNumberValue {
+                                field {
+                                  ... on ProjectV2FieldCommon {
+                                    id
+                                    name
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const epicProjectVariables = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              };
+              
+              const epicProjectData = await github.graphql(epicProjectQuery, epicProjectVariables);
+              const epicProjectItems = epicProjectData.repository.issue.projectItems.nodes;
+              
+              if (epicProjectItems.length === 0) {
+                console.log(`Epic issue #${issueNumber} is not associated with any project.`);
+                return;
+              }
+              
+              console.log(`Found ${epicProjectItems.length} project items for Epic #${issueNumber}`);
+              
+              // (Epic)Estimateフィールドを探す
+              let epicEstimateFieldUpdated = false;
+              
+              for (const projectItem of epicProjectItems) {
+                const projectId = projectItem.project.id;
+                const itemId = projectItem.id;
+                
+                // プロジェクト内の全フィールドを取得して(Epic)Estimateフィールドを特定
+                const fieldValues = projectItem.fieldValues.nodes;
+                const epicEstimateField = fieldValues.find(value => 
+                  value.field && 
+                  (value.field.name === '(Epic)Estimate' || value.field.name === 'Estimate')
+                );
+                
+                if (epicEstimateField) {
+                  const fieldId = epicEstimateField.field.id;
+                  
+                  // (Epic)Estimateフィールドに合計値を設定
+                  const updateMutation = `
+                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
+                      updateProjectV2ItemFieldValue(
+                        input: {
+                          projectId: $projectId
+                          itemId: $itemId
+                          fieldId: $fieldId
+                          value: { number: $value }
+                        }
+                      ) {
+                        clientMutationId
+                      }
+                    }
+                  `;
+                  
+                  const updateVariables = {
+                    projectId: projectId,
+                    itemId: itemId,
+                    fieldId: fieldId,
+                    value: totalEstimate
+                  };
+                  
+                  console.log(`Updating Epic #${issueNumber} with total estimate: ${totalEstimate}`);
+                  console.log(`Project ID: ${projectId}, Item ID: ${itemId}, Field ID: ${fieldId}`);
+                  
+                  await github.graphql(updateMutation, updateVariables);
+                  console.log(`Successfully updated (Epic)Estimate field for Epic #${issueNumber}`);
+                  epicEstimateFieldUpdated = true;
+                  break; // 更新が成功したら終了
+                }
+              }
+              
+              if (!epicEstimateFieldUpdated) {
+                console.log(`Could not find (Epic)Estimate field for Epic #${issueNumber}`);
+              }
+              
             } catch (error) {
               console.error(`Error processing Epic issue: ${error.message}`);
               console.error(error);
