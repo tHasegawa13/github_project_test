@@ -121,15 +121,17 @@ jobs:
               
               for (const subIssue of subIssues) {
                 // 各サブイシューのプロジェクトアイテムIDを取得
+                // ProjectV2のitem接続を使ってコンテンツIDを持つアイテムを検索する
                 const itemQuery = `
-                  query($projectId: ID!, $contentId: ID!) {
+                  query($projectId: ID!, $issueId: ID!) {
                     node(id: $projectId) {
                       ... on ProjectV2 {
-                        items(first: 1, filter: {contentIds: [$contentId]}) {
+                        items(first: 100) {
                           nodes {
                             id
                             content {
                               ... on Issue {
+                                id
                                 number
                                 title
                               }
@@ -143,11 +145,14 @@ jobs:
                 
                 const itemVariables = {
                   projectId: projectId,
-                  contentId: subIssue.id
+                  issueId: subIssue.id
                 };
                 
                 const itemData = await github.graphql(itemQuery, itemVariables);
-                const projectItems = itemData.node.items.nodes;
+                // 結果からサブイシューIDに一致するアイテムをフィルタリング
+                const projectItems = itemData.node.items.nodes.filter(item => 
+                  item.content && item.content.id === subIssue.id
+                );
                 
                 if (projectItems.length === 0) {
                   console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Not found in project`);
@@ -158,17 +163,18 @@ jobs:
                 
                 // このアイテムのEstimate値を直接取得
                 const estimateQuery = `
-                  query($projectId: ID!, $itemId: ID!, $fieldId: ID!) {
-                    node(id: $projectId) {
-                      ... on ProjectV2 {
-                        field(id: $fieldId) {
-                          ... on ProjectV2FieldCommon {
-                            name
-                          }
-                        }
-                        item(id: $itemId) {
-                          fieldValueByName(name: "Estimate") {
+                  query($itemId: ID!) {
+                    node(id: $itemId) {
+                      ... on ProjectV2Item {
+                        fieldValues(first: 20) {
+                          nodes {
                             ... on ProjectV2ItemFieldNumberValue {
+                              field {
+                                ... on ProjectV2FieldCommon {
+                                  id
+                                  name
+                                }
+                              }
                               number
                             }
                           }
@@ -179,13 +185,17 @@ jobs:
                 `;
                 
                 const estimateVariables = {
-                  projectId: projectId,
-                  itemId: projectItemId,
-                  fieldId: estimateFieldId
+                  itemId: projectItemId
                 };
                 
                 const estimateData = await github.graphql(estimateQuery, estimateVariables);
-                const estimateValue = estimateData.node.item.fieldValueByName;
+                
+                // Estimateフィールドの値を探す
+                const fieldValues = estimateData.node.fieldValues.nodes;
+                const estimateValue = fieldValues.find(value => 
+                  value.field && 
+                  value.field.id === estimateFieldId
+                );
                 
                 if (estimateValue && estimateValue.number !== null) {
                   console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Estimate = ${estimateValue.number}`);
