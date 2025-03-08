@@ -122,7 +122,7 @@ jobs:
               
               // (Epic)Estimateフィールドを特定
               const epicEstimateField = projectData.user.projectV2.fields.nodes.find(
-                field => field.name === '(Epic)Estimate' || field.name === 'Estimate'
+                field => field.name === '(Epic)Estimate'
               );
               
               if (!epicEstimateField) {
