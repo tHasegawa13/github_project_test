@@ -49,27 +49,60 @@ jobs:
               const hasParent = result.repository.issue.parent !== null;
               
               if (hasParent) {
-                console.log(`Issue #${issueNumber} has a parent issue. Adding subissue label.`);
+                console.log(`Issue #${issueNumber} has a parent issue. Adding subissue label and inheriting parent labels.`);
                 
-                // 現在のラベルを取得
-                const labels = issue.labels.map(label => label.name);
-                const hasSubissueLabel = labels.includes('subissue');
+                // 現在のIssueのラベルを取得
+                const currentLabels = issue.labels.map(label => label.name);
+                const hasSubissueLabel = currentLabels.includes('subissue');
                 
-                // subissueラベルが存在しない場合、追加
-                if (!hasSubissueLabel) {
+                // 親Issueのラベルを取得
+                const parentId = result.repository.issue.parent.id;
+                const parentQuery = `
+                  query {
+                    node(id: "${parentId}") {
+                      ... on Issue {
+                        number
+                        labels(first: 100) {
+                          nodes {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const parentData = await github.graphql(parentQuery);
+                const parentNumber = parentData.node.number;
+                console.log(`Parent issue is #${parentNumber}`);
+                
+                // 親のラベルを取得し、Epicを除外
+                let parentLabels = parentData.node.labels.nodes.map(label => label.name)
+                  .filter(label => label !== 'Epic');
+                  
+                console.log(`Parent labels (excluding Epic): ${JSON.stringify(parentLabels)}`);
+                
+                // subissueラベルと親のラベルを合わせる（重複を排除）
+                let labelsToAdd = ['subissue', ...parentLabels];
+                
+                // 現在のIssueに既に存在するラベルは追加しない
+                labelsToAdd = labelsToAdd.filter(label => !currentLabels.includes(label));
+                
+                if (labelsToAdd.length > 0) {
                   try {
                     await github.rest.issues.addLabels({
                       issue_number: issueNumber,
                       owner: context.repo.owner,
                       repo: context.repo.repo,
-                      labels: ['subissue']
+                      labels: labelsToAdd
                     });
-                    console.log(`Added 'subissue' label to issue #${issueNumber}`);
+                    console.log(`Added labels to issue #${issueNumber}: ${JSON.stringify(labelsToAdd)}`);
                   } catch (labelError) {
-                    console.error(`Error adding label: ${labelError.message}`);
-                    // ラベルがリポジトリに存在するか確認
-                    console.log("Make sure the 'subissue' label exists in your repository");
+                    console.error(`Error adding labels: ${labelError.message}`);
+                    console.log("Make sure all labels exist in your repository");
                   }
+                } else {
+                  console.log(`No new labels to add to issue #${issueNumber}`);
                 }
                 
                 console.log(`Issue #${issueNumber} has been processed as a sub-issue`);
