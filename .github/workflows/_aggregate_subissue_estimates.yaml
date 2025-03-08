@@ -116,34 +116,22 @@ jobs:
               
               const estimateFieldId = estimateField.id;
               
-              // Get estimate values for each sub-issue
+              // Get estimate values for each sub-issue directly
               let totalEstimate = 0;
               
-              // 全てのプロジェクトアイテムを1回で取得
-              const allItemsQuery = `
-                query {
-                  user(login: "tHasegawa13") {
-                    projectV2(number: 1) {
-                      items(first: 100) {
-                        nodes {
-                          id
-                          content {
-                            ... on Issue {
-                              id
-                              number
-                              title
-                            }
-                          }
-                          fieldValues(first: 20) {
-                            nodes {
-                              ... on ProjectV2ItemFieldNumberValue {
-                                field {
-                                  ... on ProjectV2FieldCommon {
-                                    id
-                                    name
-                                  }
-                                }
+              for (const subIssue of subIssues) {
+                // 各サブイシューのプロジェクトアイテムIDを取得
+                const itemQuery = `
+                  query($projectId: ID!, $contentId: ID!) {
+                    node(id: $projectId) {
+                      ... on ProjectV2 {
+                        items(first: 1, filter: {contentIds: [$contentId]}) {
+                          nodes {
+                            id
+                            content {
+                              ... on Issue {
                                 number
+                                title
                               }
                             }
                           }
@@ -151,39 +139,59 @@ jobs:
                       }
                     }
                   }
-                }
-              `;
-              
-              const allItemsData = await github.graphql(allItemsQuery);
-              const allProjectItems = allItemsData.user.projectV2.items.nodes;
-              
-              console.log(`Retrieved ${allProjectItems.length} items from the project`);
-              
-              // サブイシューIDのセットを作成
-              const subIssueIds = new Set(subIssues.map(issue => issue.id));
-              
-              for (const subIssue of subIssues) {
-                // プロジェクト内でこのサブイシューに対応するアイテムを探す
-                const projectItem = allProjectItems.find(item => 
-                  item.content && 
-                  item.content.id === subIssue.id
-                );
+                `;
                 
-                if (projectItem) {
-                  // このアイテムのEstimateフィールドを探す
-                  const estimateValue = projectItem.fieldValues.nodes.find(value => 
-                    value.field && 
-                    value.field.id === estimateFieldId
-                  );
-                  
-                  if (estimateValue && estimateValue.number !== null) {
-                    console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Estimate = ${estimateValue.number}`);
-                    totalEstimate += estimateValue.number;
-                  } else {
-                    console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): No estimate found`);
-                  }
-                } else {
+                const itemVariables = {
+                  projectId: projectId,
+                  contentId: subIssue.id
+                };
+                
+                const itemData = await github.graphql(itemQuery, itemVariables);
+                const projectItems = itemData.node.items.nodes;
+                
+                if (projectItems.length === 0) {
                   console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Not found in project`);
+                  continue;
+                }
+                
+                const projectItemId = projectItems[0].id;
+                
+                // このアイテムのEstimate値を直接取得
+                const estimateQuery = `
+                  query($projectId: ID!, $itemId: ID!, $fieldId: ID!) {
+                    node(id: $projectId) {
+                      ... on ProjectV2 {
+                        field(id: $fieldId) {
+                          ... on ProjectV2FieldCommon {
+                            name
+                          }
+                        }
+                        item(id: $itemId) {
+                          fieldValueByName(name: "Estimate") {
+                            ... on ProjectV2ItemFieldNumberValue {
+                              number
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const estimateVariables = {
+                  projectId: projectId,
+                  itemId: projectItemId,
+                  fieldId: estimateFieldId
+                };
+                
+                const estimateData = await github.graphql(estimateQuery, estimateVariables);
+                const estimateValue = estimateData.node.item.fieldValueByName;
+                
+                if (estimateValue && estimateValue.number !== null) {
+                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Estimate = ${estimateValue.number}`);
+                  totalEstimate += estimateValue.number;
+                } else {
+                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): No estimate found`);
                 }
               }
               
