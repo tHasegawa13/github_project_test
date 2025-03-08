@@ -201,10 +201,10 @@ jobs:
                 
                 // プロジェクト内の全フィールドを取得して(Epic)Estimateフィールドを特定
                 const fieldValues = projectItem.fieldValues.nodes;
-                const epicEstimateField = fieldValues.find(value => 
-                  value.field && 
-                  (value.field.name === '(Epic)Estimate' || value.field.name === 'Estimate')
+                const epicEstimateField = fieldValues.find(value =>
+                  value.field && value.field.name === '(Epic)Estimate'
                 );
+                console.log(epicEstimateField);
                 
                 if (epicEstimateField) {
                   const fieldId = epicEstimateField.field.id;
