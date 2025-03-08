@@ -53,6 +53,7 @@ jobs:
                           id
                           number
                           title
+                          state
                         }
                       }
                     }
@@ -155,8 +156,21 @@ jobs:
               
               console.log(`Found field: ${epicEstimateField.name} (ID: ${epicEstimateField.id})`);
               
+              // Find (Epic)残Estimate field
+              const epicRemainingEstimateField = epicProjectItem.project.fields.nodes.find(
+                field => field.name === '(Epic)残Estimate'
+              );
+              
+              if (!epicRemainingEstimateField) {
+                console.log(`Could not find (Epic)残Estimate field in project ${projectTitle}`);
+                return;
+              }
+              
+              console.log(`Found field: ${epicRemainingEstimateField.name} (ID: ${epicRemainingEstimateField.id})`);
+              
               // Get estimate values for each sub-issue directly
               let totalEstimate = 0;
+              let totalRemainingEstimate = 0;
               
               for (const subIssue of subIssues) {
                 // Get project item for this sub-issue
@@ -166,6 +180,7 @@ jobs:
                       issue(number: $issue_number) {
                         number
                         title
+                        state
                         projectItems(first: 10) {
                           nodes {
                             id
@@ -199,6 +214,7 @@ jobs:
                 };
                 
                 const subIssueData = await github.graphql(subIssueProjectQuery, subIssueVariables);
+                const subIssueState = subIssueData.repository.issue.state;
                 const subIssueProjectItems = subIssueData.repository.issue.projectItems.nodes;
                 
                 // Find the project item that belongs to the same project as the epic
@@ -219,22 +235,29 @@ jobs:
                 );
                 
                 if (estimateValue && estimateValue.number !== null) {
-                  console.log(`Sub-issue #${subIssue.number} (${subIssueData.repository.issue.title}): Estimate = ${estimateValue.number}`);
+                  console.log(`Sub-issue #${subIssue.number} (${subIssueData.repository.issue.title}): Estimate = ${estimateValue.number}, State = ${subIssueState}`);
+                  
+                  // Add to total estimate
                   totalEstimate += estimateValue.number;
+                  
+                  // Add to remaining estimate only if issue is open
+                  if (subIssueState.toUpperCase() === 'OPEN') {
+                    totalRemainingEstimate += estimateValue.number;
+                  }
                 } else {
                   console.log(`Sub-issue #${subIssue.number} (${subIssueData.repository.issue.title}): No estimate found in project ${projectTitle}`);
                 }
               }
               
               console.log(`Total estimate for Epic #${issueNumber}: ${totalEstimate}`);
-              console.log(`Sum of all sub-issue estimates: ${totalEstimate}`);
+              console.log(`Total remaining estimate (open sub-issues only) for Epic #${issueNumber}: ${totalRemainingEstimate}`);
               
               // Update Epic estimate
               console.log(`Updating Epic #${issueNumber} with total estimate: ${totalEstimate}`);
               console.log(`Project ID: ${projectId}, Item ID: ${epicItemId}, Field ID: ${epicEstimateField.id}`);
               
-              // Update Estimate value
-              const updateMutation = `
+              // Update (Epic)Estimate value
+              const updateEstimateMutation = `
                 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
                   updateProjectV2ItemFieldValue(
                     input: {
@@ -249,7 +272,7 @@ jobs:
                 }
               `;
               
-              const updateVariables = {
+              const updateEstimateVariables = {
                 projectId: projectId,
                 itemId: epicItemId,
                 fieldId: epicEstimateField.id,
@@ -257,10 +280,41 @@ jobs:
               };
               
               try {
-                await github.graphql(updateMutation, updateVariables);
+                await github.graphql(updateEstimateMutation, updateEstimateVariables);
                 console.log(`Successfully updated ${epicEstimateField.name} field for Epic #${issueNumber}`);
               } catch (updateError) {
                 console.error(`Error updating Epic estimate: ${updateError.message}`);
+                console.error(updateError);
+              }
+              
+              // Update (Epic)残Estimate value
+              const updateRemainingEstimateMutation = `
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
+                  updateProjectV2ItemFieldValue(
+                    input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: { number: $value }
+                    }
+                  ) {
+                    clientMutationId
+                  }
+                }
+              `;
+              
+              const updateRemainingEstimateVariables = {
+                projectId: projectId,
+                itemId: epicItemId,
+                fieldId: epicRemainingEstimateField.id,
+                value: totalRemainingEstimate
+              };
+              
+              try {
+                await github.graphql(updateRemainingEstimateMutation, updateRemainingEstimateVariables);
+                console.log(`Successfully updated ${epicRemainingEstimateField.name} field for Epic #${issueNumber}`);
+              } catch (updateError) {
+                console.error(`Error updating Epic remaining estimate: ${updateError.message}`);
                 console.error(updateError);
               }
               
