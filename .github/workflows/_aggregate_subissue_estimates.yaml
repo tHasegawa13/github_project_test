@@ -76,86 +76,76 @@ jobs:
               
               console.log(`Found ${subIssues.length} sub-issues for Epic #${issueNumber}`);
               
-              // Get estimate values for each sub-issue directly
-              let totalEstimate = 0;
-              
-              for (const subIssue of subIssues) {
-                // サブイシューのプロジェクトアイテムとEstimate値を直接取得
-                const subIssueQuery = `
-                  query($owner: String!, $repo: String!, $issue_number: Int!) {
-                    repository(owner: $owner, name: $repo) {
-                      issue(number: $issue_number) {
-                        projectItems(first: 100) {
-                          nodes {
-                            fieldValues(first: 100) {
-                              nodes {
-                                ... on ProjectV2ItemFieldNumberValue {
-                                  field {
-                                    ... on ProjectV2FieldCommon {
-                                      name
-                                    }
-                                  }
-                                  number
-                                }
-                              }
-                            }
+              // まずプロジェクト情報を取得
+              const projectQuery = `
+                query {
+                  user(login: "tHasegawa13") {
+                    projectV2(number: 1) {
+                      id
+                      title
+                      fields(first: 20) {
+                        nodes {
+                          ... on ProjectV2FieldCommon {
+                            id
+                            name
                           }
                         }
                       }
                     }
                   }
-                `;
-                
-                const subIssueVariables = {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: subIssue.number
-                };
-                
-                const subIssueData = await github.graphql(subIssueQuery, subIssueVariables);
-                const projectItems = subIssueData.repository.issue.projectItems.nodes;
-                
-                if (projectItems.length === 0) {
-                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Not found in any project`);
-                  continue;
                 }
-                
-                // Estimateフィールドを探す
-                let estimateFound = false;
-                
-                for (const projectItem of projectItems) {
-                  const fieldValues = projectItem.fieldValues.nodes;
-                  const estimateValue = fieldValues.find(value => 
-                    value.field && 
-                    value.field.name === 'Estimate'
-                  );
-                  
-                  if (estimateValue && estimateValue.number !== null) {
-                    console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Estimate = ${estimateValue.number}`);
-                    totalEstimate += estimateValue.number;
-                    estimateFound = true;
-                    break; // 値が見つかったらこのサブイシューの処理を終了
-                  }
-                }
-                
-                if (!estimateFound) {
-                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): No estimate found`);
-                }
+              `;
+              
+              const projectData = await github.graphql(projectQuery);
+              const projectId = projectData.user.projectV2.id;
+              const projectTitle = projectData.user.projectV2.title;
+              console.log(`Target project: ${projectTitle} (ID: ${projectId})`);
+              
+              // プロジェクト内のフィールドを確認
+              console.log('Available fields in the project:');
+              projectData.user.projectV2.fields.nodes.forEach(field => {
+                console.log(`- ${field.name} (ID: ${field.id})`);
+              });
+              
+              // Estimateフィールドを特定
+              const estimateField = projectData.user.projectV2.fields.nodes.find(
+                field => field.name === 'Estimate'
+              );
+              
+              if (!estimateField) {
+                console.log(`Could not find Estimate field in project ${projectTitle}`);
+                return;
               }
               
-              console.log(`Total estimate for Epic #${issueNumber}: ${totalEstimate}`);
-              console.log(`Sum of all sub-issue estimates: ${totalEstimate}`);
+              const estimateFieldId = estimateField.id;
+              console.log(`Found Estimate field: ID: ${estimateFieldId}`);
               
-              // Epicのプロジェクトアイテムと(Epic)Estimateフィールドを取得
-              const epicProjectQuery = `
-                query($owner: String!, $repo: String!, $issue_number: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    issue(number: $issue_number) {
-                      projectItems(first: 100) {
+              // (Epic)Estimateフィールドを特定
+              const epicEstimateField = projectData.user.projectV2.fields.nodes.find(
+                field => field.name === '(Epic)Estimate' || field.name === 'Estimate'
+              );
+              
+              if (!epicEstimateField) {
+                console.log(`Could not find (Epic)Estimate field in project ${projectTitle}`);
+                return;
+              }
+              
+              console.log(`Found field: ${epicEstimateField.name} (ID: ${epicEstimateField.id})`);
+              
+              // 特定プロジェクト内のすべてのアイテムを一度に取得
+              const projectItemsQuery = `
+                query($projectId: ID!) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
+                      items(first: 100) {
                         nodes {
                           id
-                          project {
-                            id
+                          content {
+                            ... on Issue {
+                              id
+                              number
+                              title
+                            }
                           }
                           fieldValues(first: 100) {
                             nodes {
@@ -166,6 +156,7 @@ jobs:
                                     name
                                   }
                                 }
+                                number
                               }
                             }
                           }
@@ -176,74 +167,97 @@ jobs:
                 }
               `;
               
-              const epicProjectVariables = {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber
+              const projectItemsVariables = {
+                projectId: projectId
               };
               
-              const epicProjectData = await github.graphql(epicProjectQuery, epicProjectVariables);
-              const epicProjectItems = epicProjectData.repository.issue.projectItems.nodes;
+              const projectItemsData = await github.graphql(projectItemsQuery, projectItemsVariables);
+              const allProjectItems = projectItemsData.node.items.nodes;
               
-              if (epicProjectItems.length === 0) {
-                console.log(`Epic issue #${issueNumber} is not associated with any project.`);
-                return;
-              }
+              console.log(`Retrieved ${allProjectItems.length} items from project ${projectTitle}`);
               
-              console.log(`Found ${epicProjectItems.length} project items for Epic #${issueNumber}`);
+              // Get estimate values for each sub-issue directly
+              let totalEstimate = 0;
               
-              // (Epic)Estimateフィールドを探す
-              let epicEstimateFieldUpdated = false;
-              
-              for (const projectItem of epicProjectItems) {
-                const projectId = projectItem.project.id;
-                const itemId = projectItem.id;
-                
-                // プロジェクト内の全フィールドを取得して(Epic)Estimateフィールドを特定
-                const fieldValues = projectItem.fieldValues.nodes;
-                const epicEstimateField = fieldValues.find(value =>
-                  value.field && value.field.name === '(Epic)Estimate'
+              for (const subIssue of subIssues) {
+                // プロジェクト内でこのサブイシューに対応するアイテムを探す
+                const projectItem = allProjectItems.find(item => 
+                  item.content && 
+                  item.content.number === subIssue.number
                 );
-                console.log(epicEstimateField);
                 
-                if (epicEstimateField) {
-                  const fieldId = epicEstimateField.field.id;
-                  
-                  // (Epic)Estimateフィールドに合計値を設定
-                  const updateMutation = `
-                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
-                      updateProjectV2ItemFieldValue(
-                        input: {
-                          projectId: $projectId
-                          itemId: $itemId
-                          fieldId: $fieldId
-                          value: { number: $value }
-                        }
-                      ) {
-                        clientMutationId
-                      }
-                    }
-                  `;
-                  
-                  const updateVariables = {
-                    projectId: projectId,
-                    itemId: itemId,
-                    fieldId: fieldId,
-                    value: totalEstimate
-                  };
-                  
-                  console.log(`Updating Epic #${issueNumber} with total estimate: ${totalEstimate}`);
-                  console.log(`Project ID: ${projectId}, Item ID: ${itemId}, Field ID: ${fieldId}`);
-                  
-                  await github.graphql(updateMutation, updateVariables);
-                  console.log(`Successfully updated (Epic)Estimate field for Epic #${issueNumber}`);
-                  epicEstimateFieldUpdated = true;
-                  break; // 更新が成功したら終了
+                if (!projectItem) {
+                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Not found in project ${projectTitle}`);
+                  continue;
+                }
+                
+                // このアイテムのEstimateフィールドを探す
+                const fieldValues = projectItem.fieldValues.nodes;
+                const estimateValue = fieldValues.find(value => 
+                  value.field && 
+                  value.field.id === estimateFieldId
+                );
+                
+                if (estimateValue && estimateValue.number !== null) {
+                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): Estimate = ${estimateValue.number}`);
+                  totalEstimate += estimateValue.number;
+                } else {
+                  console.log(`Sub-issue #${subIssue.number} (${subIssue.title}): No estimate found in project ${projectTitle}`);
                 }
               }
               
-              if (!epicEstimateFieldUpdated) {
-                console.log(`Could not find (Epic)Estimate field for Epic #${issueNumber}`);
+              console.log(`Total estimate for Epic #${issueNumber}: ${totalEstimate}`);
+              console.log(`Sum of all sub-issue estimates: ${totalEstimate}`);
+              
+              // Epicのプロジェクトアイテムを取得
+              const epicItem = allProjectItems.find(item => 
+                item.content && 
+                item.content.number === issueNumber
+              );
+              
+              if (!epicItem) {
+                console.log(`Epic issue #${issueNumber} is not associated with project ${projectTitle}.`);
+                return;
+              }
+              
+              console.log(`Found Epic #${issueNumber} in project ${projectTitle}`);
+              
+              // プロジェクトアイテムとフィールドIDが取得できたら更新を実行
+              const itemId = epicItem.id;
+              const fieldId = epicEstimateField.id;
+              
+              console.log(`Updating Epic #${issueNumber} with total estimate: ${totalEstimate}`);
+              console.log(`Project ID: ${projectId}, Item ID: ${itemId}, Field ID: ${fieldId}`);
+              
+              // Estimate値を更新
+              const updateMutation = `
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
+                  updateProjectV2ItemFieldValue(
+                    input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: { number: $value }
+                    }
+                  ) {
+                    clientMutationId
+                  }
+                }
+              `;
+              
+              const updateVariables = {
+                projectId: projectId,
+                itemId: itemId,
+                fieldId: fieldId,
+                value: totalEstimate
+              };
+              
+              try {
+                await github.graphql(updateMutation, updateVariables);
+                console.log(`Successfully updated ${epicEstimateField.name} field for Epic #${issueNumber}`);
+              } catch (updateError) {
+                console.error(`Error updating Epic estimate: ${updateError.message}`);
+                console.error(updateError);
               }
               
             } catch (error) {
