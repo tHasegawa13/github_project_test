@@ -98,6 +98,12 @@ jobs:
               const projectData = await github.graphql(projectQuery);
               const projectId = projectData.user.projectV2.id;
               
+              // Output all fields in the project
+              console.log('All project fields:');
+              projectData.user.projectV2.fields.nodes.forEach(field => {
+                console.log(`Field: ${field.name}, ID: ${field.id}`);
+              });
+              
               // Find the Estimate field ID
               const estimateField = projectData.user.projectV2.fields.nodes.find(
                 field => field.name === 'Estimate'
