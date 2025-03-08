@@ -1,0 +1,109 @@
+name: Check Parent Issue and Add Label
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  check_parent_issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for parent issue and add subissue label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const issue = context.payload.issue;
+            console.log(`処理開始: Issue #${issue.number} - ${issue.title}`);
+
+            // Issueの内容を取得して親Issueへの参照をチェック
+            const issueBody = issue.body || '';
+            console.log(`Issue本文: ${issueBody.substring(0, 100)}${issueBody.length > 100 ? '...' : ''}`);
+
+            // 親Issueの参照パターン: 正規表現で #数字 または "parent: #数字" などを検出
+            const parentIssueRegex = /(?:parent(?:\s+issue)?[\s:]+)?#(\d+)/i;
+            console.log(`使用する正規表現パターン: ${parentIssueRegex}`);
+            const parentMatch = issueBody.match(parentIssueRegex);
+            console.log(`正規表現マッチ結果: ${JSON.stringify(parentMatch)}`);
+
+
+            // 現在のIssueのラベルを取得
+            const currentLabels = issue.labels.map(label => label.name);
+            console.log(`現在のラベル: ${JSON.stringify(currentLabels)}`);
+            const hasSubissueLabel = currentLabels.includes('subissue');
+            console.log(`subissueラベルの有無: ${hasSubissueLabel}`);
+
+            if (parentMatch) {
+              // 親Issueが存在する場合
+              console.log(`親Issueが見つかりました: #${parentMatch[1]}`);
+
+              // subissueラベルがまだ付いていない場合は追加
+              if (!hasSubissueLabel) {
+                await github.rest.issues.addLabels({
+                  issue_number: issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  labels: ['subissue']
+                });
+                console.log(`Issueに 'subissue' ラベルを追加しました: #${issue.number}`);
+              }
+
+              // GitHub Projectに追加
+              try {
+                console.log(`プロジェクトへの追加を試みます - Issue Node ID: ${issue.node_id}`);
+                // Note: GitHub APIでプロジェクトへの追加には適切なAPIエンドポイントを使用する必要があります
+                // ここではGraphQLを使用してプロジェクトにIssueを追加します
+                const projectQuery = `
+                  mutation {
+                    addProjectV2ItemById(input: {
+                      projectId: "users/tHasegawa13/projects/1"
+                      contentId: "${issue.node_id}"
+                    }) {
+                      item {
+                        id
+                      }
+                    }
+                  }
+                `;
+
+                console.log(`実行するGraphQLクエリ: ${projectQuery}`);
+
+                const result = await github.graphql(projectQuery, {
+                  headers: {
+                    authorization: `token ${process.env.GITHUB_TOKEN}`
+                  }
+                });
+
+                console.log(`GraphQL結果: ${JSON.stringify(result)}`);
+
+
+                console.log(`Issueをプロジェクトに追加しました: users/tHasegawa13/projects/1`);
+              } catch (error) {
+                console.error('プロジェクトへの追加中にエラーが発生しました:');
+                console.error(`エラータイプ: ${error.name}`);
+                console.error(`エラーメッセージ: ${error.message}`);
+                if (error.request) {
+                  console.error(`リクエスト情報: ${JSON.stringify(error.request)}`);
+                }
+                if (error.response) {
+                  console.error(`レスポンス情報: ${JSON.stringify(error.response)}`);
+                }
+                console.error(`スタックトレース: ${error.stack}`);
+              }
+            } else if (hasSubissueLabel) {
+              // 親Issueの参照がなくなったが、subissueラベルが付いている場合はラベルを削除
+              console.log(`親Issueの参照がなくなりました。subissueラベルを削除します。`);
+
+              try {
+                await github.rest.issues.removeLabel({
+                  issue_number: issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: 'subissue'
+                });
+                console.log(`ラベル削除API呼び出し成功`);
+              } catch (error) {
+                console.error(`ラベル削除中にエラーが発生しました: ${error.message}`);
+              }
+              console.log(`親Issueの参照がなくなったため 'subissue' ラベルを削除しました: #${issue.number}`);
+            }
