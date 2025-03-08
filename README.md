@@ -1,6 +1,7 @@
 # Github Project Test
 
 業務効率化のため Github Actions を使用して Github Project や Issue の操作を行なってみる。
+https://github.com/users/tHasegawa13/projects/1 を操作しています。
 
 （以下自動生成です）
 
