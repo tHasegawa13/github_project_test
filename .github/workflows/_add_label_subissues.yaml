@@ -98,11 +98,31 @@ jobs:
           # PAT（Personal Access Token）を使用してプロジェクトの操作を行う
           github-token: ${{secrets.PROJECT_ACCESS_TOKEN}}
           script: |
-            const issueNumber = context.payload.issue.number;
             const owner = process.env.PROJECT_OWNER;
             const projectNumber = process.env.PROJECT_NUMBER;
 
-            // Project項目のIDを取得するGraphQLクエリ
+            // IssueIDを取得
+            const query = `
+              query($owner: String!, $repo: String!, $issueNumber: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $issueNumber) {
+                    id
+                    number
+                    title
+                    parent {
+                      id
+                    }
+                  }
+                }
+              }
+            `;
+            const issueData = await github.graphql(query, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issueNumber: context.payload.issue.number
+            });
+
+            // 追加先のProjectIDを取得
             const projectQuery = `
               query {
                 user(login: "${owner}") {
@@ -130,5 +150,5 @@ jobs:
             `;
             await github.graphql(addToProjectMutation, {
               projectId: projectId,
-              contentId: issueNumber
+              contentId: issueData.repository.issue.id
             });
