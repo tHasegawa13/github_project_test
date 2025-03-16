@@ -4,6 +4,10 @@ on:
   issues:
     types: [opened, edited]
 
+env:
+  PROJECT_OWNER: tHasegawa13
+  PROJECT_NUMBER: 1
+
 jobs:
   check_parent_issue:
     runs-on: ubuntu-latest
@@ -31,22 +35,14 @@ jobs:
                 }
               }
             `;
-            const variables = {
+            const result = await github.graphql(query, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issueNumber: context.payload.issue.number
-            };
-
-            const result = await github.graphql(query, variables);
+            });
             console.log(`Issue data: ${JSON.stringify(result)}`);
 
             return { parentIssueId: result.repository.issue.parent?.id }
-
-      - name: echo result
-        run: echo ${{ steps.get-parent-issue.outputs.result }}
-
-      - name: echo result2
-        run: echo ${{ fromJSON(steps.get-parent-issue.outputs.result).parentIssueId }}
 
       - name: add issue labels
         if: fromJSON(steps.get-parent-issue.outputs.result).parentIssueId != ''
@@ -54,57 +50,45 @@ jobs:
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
-            if (hasParent) {
-              console.log(`Issue #${issueNumber} has a parent issue. Adding subissue label and inheriting parent labels.`);
-              
-              // 現在のIssueのラベルを取得
-              const currentLabels = issue.labels.map(label => label.name);
-              const hasSubissueLabel = currentLabels.includes('subissue');
-              
-              // 親Issueのラベルを取得
-              const parentId = result.repository.issue.parent.id;
-              const parentQuery = `
-                query {
-                  node(id: "${parentId}") {
-                    ... on Issue {
-                      number
-                      labels(first: 100) {
-                        nodes {
-                          name
-                        }
+            const issueNumber = context.payload.issue.number;
+
+            // 親Issueのラベルを取得
+            const parentId = '${{ fromJSON(steps.get-parent-issue.outputs.result).parentIssueId }}'
+            console.log(`Parent issue is #${parentId}`);
+
+            const parentData = await github.graphql(`
+              query {
+                node(id: "${parentId}") {
+                  ... on Issue {
+                    number
+                    labels(first: 100) {
+                      nodes {
+                        name
                       }
                     }
                   }
                 }
-              `;
-              
-              const parentData = await github.graphql(parentQuery);
-              const parentNumber = parentData.node.number;
-              console.log(`Parent issue is #${parentNumber}`);
-              
-              // 親のラベルを取得し、Epicを除外
-              let parentLabels = parentData.node.labels.nodes.map(label => label.name)
-                .filter(label => label !== 'Epic');
-                
-              console.log(`Parent labels (excluding Epic): ${JSON.stringify(parentLabels)}`);
-              
-              // subissueラベルと親のラベルを合わせる（重複を排除）
-              let labelsToAdd = ['subissue', ...parentLabels];
-              
-              // 現在のIssueに既に存在するラベルは追加しない
-              labelsToAdd = labelsToAdd.filter(label => !currentLabels.includes(label));
-              
-              if (labelsToAdd.length > 0) {
-                await github.rest.issues.addLabels({
-                  issue_number: issueNumber,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  labels: labelsToAdd
-                });
-                console.log(`Added labels to issue #${issueNumber}: ${JSON.stringify(labelsToAdd)}`);
               }
-              
-              console.log(`Issue #${issueNumber} has been processed as a sub-issue`);
+            `);
+
+            const parentLabels = parentData.node.labels.nodes.map(label => label.name)
+              .filter(label => label !== 'Epic');
+
+            // 紐づけるラベルを配列で作成
+            let labelsToAdd = ['subissue', ...parentLabels];
+            const currentIssueLabels = context.payload.issue.labels.map(label => label.name);
+            labelsToAdd = labelsToAdd.filter(label => !currentIssueLabels.includes(label));
+
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: labelsToAdd
+              });
+              console.log(`Added labels to issue #${issueNumber}: ${JSON.stringify(labelsToAdd)}`);
+            } else {
+              console.log(`No labels to add to issue #${issueNumber}`);
             }
 
       - name: Add issue to project
@@ -114,78 +98,37 @@ jobs:
           # PAT（Personal Access Token）を使用してプロジェクトの操作を行う
           github-token: ${{secrets.PROJECT_ACCESS_TOKEN}}
           script: |
-            const issue = context.payload.issue;
-            const issueNumber = issue.number;
+            const issueNumber = context.payload.issue.number;
+            const owner = process.env.PROJECT_OWNER;
+            const projectNumber = process.env.PROJECT_NUMBER;
 
-            try {
-              // GraphQLクエリを実行して親Issueの情報を取得
-              const query = `
-                query($owner: String!, $repo: String!, $issueNumber: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    issue(number: $issueNumber) {
-                      id
-                      number
-                      title
-                      parent {
-                        id
-                      }
-                    }
+            // Project項目のIDを取得するGraphQLクエリ
+            const projectQuery = `
+              query {
+                user(login: "${owner}") {
+                  projectV2(number: ${projectNumber}) {
+                    id
                   }
                 }
-              `;
-              
-              const variables = {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issueNumber: issueNumber
-              };
-              
-              const result = await github.graphql(query, variables);
-              
-              // 親Issueが存在するかチェック
-              const hasParent = result.repository.issue.parent !== null;
-              
-              if (hasParent) {
-                // 指定されたGitHub Projectに追加
-                try {
-                  // Project項目のIDを取得するGraphQLクエリ
-                  const projectQuery = `
-                    query {
-                      user(login: "tHasegawa13") {
-                        projectV2(number: 1) {
-                          id
-                        }
-                      }
-                    }
-                  `;
-                  
-                  const projectData = await github.graphql(projectQuery);
-                  const projectId = projectData.user.projectV2.id;
-                  
-                  // IssueをProjectに追加するためのGraphQLミューテーション
-                  const addToProjectMutation = `
-                    mutation($projectId: ID!, $contentId: ID!) {
-                      addProjectV2ItemById(input: {
-                        projectId: $projectId
-                        contentId: $contentId
-                      }) {
-                        item {
-                          id
-                        }
-                      }
-                    }
-                  `;
-                  
-                  await github.graphql(addToProjectMutation, {
-                    projectId: projectId,
-                    contentId: result.repository.issue.id
-                  });
-                  
-                  console.log(`Added issue #${issueNumber} to project users/tHasegawa13/projects/1`);
-                } catch (projectError) {
-                  console.error(`Error adding issue to project: ${projectError.message}`);
+              }
+            `;
+            const projectData = await github.graphql(projectQuery);
+            const projectId = projectData.user.projectV2.id;
+
+            // IssueをProjectに追加するためのGraphQLミューテーション
+            const addToProjectMutation = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {
+                  projectId: $projectId
+                  contentId: $contentId
+                }) {
+                  item {
+                    id
+                  }
                 }
               }
-            } catch (error) {
-              console.error(`Error in project step: ${error.message}`);
-            }
+            `;
+            await github.graphql(addToProjectMutation, {
+              projectId: projectId,
+              contentId: result.repository.issue.id
+            });
