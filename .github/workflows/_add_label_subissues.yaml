@@ -13,11 +13,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
-      - name: ls
-        run: |
-          ls
       - name: hello
-        run: .github/workflows/scripts/check_subissue.sh
+        run: |
+          chmod +x .github/workflows/scripts/check_subissue.sh
+          .github/workflows/scripts/check_subissue.sh
       - name: Check for parent issue and add labels
         uses: actions/github-script@v7
         with:
