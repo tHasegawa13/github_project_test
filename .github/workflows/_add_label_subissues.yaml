@@ -130,5 +130,5 @@ jobs:
             `;
             await github.graphql(addToProjectMutation, {
               projectId: projectId,
-              contentId: result.repository.issue.id
+              contentId: issueNumber
             });
