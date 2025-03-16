@@ -13,7 +13,6 @@ jobs:
     steps:
       - name: ls
         run: |
-          pwd
           ls
       - name: hello
         run: .github/workflows/scripts/check_subissue.sh
