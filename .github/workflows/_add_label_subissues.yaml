@@ -11,112 +11,100 @@ jobs:
       issues: write
       contents: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-      - name: hello
-        run: |
-          chmod +x .github/workflows/scripts/check_subissue.sh
-          .github/workflows/scripts/check_subissue.sh
-      - name: Check for parent issue and add labels
+      - name: get parent issue
+        id: get-parent-issue
         uses: actions/github-script@v7
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
           script: |
-            const issue = context.payload.issue;
-            const issueNumber = issue.number;
-
-            try {
-              // GraphQLクエリを実行して親Issueの情報を取得
-              const query = `
-                query($owner: String!, $repo: String!, $issueNumber: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    issue(number: $issueNumber) {
+            const query = `
+              query($owner: String!, $repo: String!, $issueNumber: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $issueNumber) {
+                    id
+                    number
+                    title
+                    parent {
                       id
+                    }
+                  }
+                }
+              }
+            `;
+            const variables = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issueNumber: context.payload.issue.number
+            };
+
+            const result = await github.graphql(query, variables);
+            console.log(`Issue data: ${JSON.stringify(result)}`);
+
+            return { parentIssueId: result.repository.issue.parent?.id }
+
+      - name: echo result
+        run: echo ${{ steps.get-parent-issue.outputs.result }}
+
+      - name: echo result2
+        run: echo ${{ fromJSON(steps.get-parent-issue.outputs.result).parentIssueId }}
+
+      - name: add issue labels
+        if: fromJSON(steps.get-parent-issue.outputs.result).parentIssueId != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            if (hasParent) {
+              console.log(`Issue #${issueNumber} has a parent issue. Adding subissue label and inheriting parent labels.`);
+              
+              // 現在のIssueのラベルを取得
+              const currentLabels = issue.labels.map(label => label.name);
+              const hasSubissueLabel = currentLabels.includes('subissue');
+              
+              // 親Issueのラベルを取得
+              const parentId = result.repository.issue.parent.id;
+              const parentQuery = `
+                query {
+                  node(id: "${parentId}") {
+                    ... on Issue {
                       number
-                      title
-                      parent {
-                        id
+                      labels(first: 100) {
+                        nodes {
+                          name
+                        }
                       }
                     }
                   }
                 }
               `;
               
-              const variables = {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issueNumber: issueNumber
-              };
+              const parentData = await github.graphql(parentQuery);
+              const parentNumber = parentData.node.number;
+              console.log(`Parent issue is #${parentNumber}`);
               
-              const result = await github.graphql(query, variables);
-              console.log(`Issue data: ${JSON.stringify(result)}`);
+              // 親のラベルを取得し、Epicを除外
+              let parentLabels = parentData.node.labels.nodes.map(label => label.name)
+                .filter(label => label !== 'Epic');
+                
+              console.log(`Parent labels (excluding Epic): ${JSON.stringify(parentLabels)}`);
               
-              // 親Issueが存在するかチェック
-              const hasParent = result.repository.issue.parent !== null;
+              // subissueラベルと親のラベルを合わせる（重複を排除）
+              let labelsToAdd = ['subissue', ...parentLabels];
               
-              if (hasParent) {
-                console.log(`Issue #${issueNumber} has a parent issue. Adding subissue label and inheriting parent labels.`);
-                
-                // 現在のIssueのラベルを取得
-                const currentLabels = issue.labels.map(label => label.name);
-                const hasSubissueLabel = currentLabels.includes('subissue');
-                
-                // 親Issueのラベルを取得
-                const parentId = result.repository.issue.parent.id;
-                const parentQuery = `
-                  query {
-                    node(id: "${parentId}") {
-                      ... on Issue {
-                        number
-                        labels(first: 100) {
-                          nodes {
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
-                `;
-                
-                const parentData = await github.graphql(parentQuery);
-                const parentNumber = parentData.node.number;
-                console.log(`Parent issue is #${parentNumber}`);
-                
-                // 親のラベルを取得し、Epicを除外
-                let parentLabels = parentData.node.labels.nodes.map(label => label.name)
-                  .filter(label => label !== 'Epic');
-                  
-                console.log(`Parent labels (excluding Epic): ${JSON.stringify(parentLabels)}`);
-                
-                // subissueラベルと親のラベルを合わせる（重複を排除）
-                let labelsToAdd = ['subissue', ...parentLabels];
-                
-                // 現在のIssueに既に存在するラベルは追加しない
-                labelsToAdd = labelsToAdd.filter(label => !currentLabels.includes(label));
-                
-                if (labelsToAdd.length > 0) {
-                  try {
-                    await github.rest.issues.addLabels({
-                      issue_number: issueNumber,
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      labels: labelsToAdd
-                    });
-                    console.log(`Added labels to issue #${issueNumber}: ${JSON.stringify(labelsToAdd)}`);
-                  } catch (labelError) {
-                    console.error(`Error adding labels: ${labelError.message}`);
-                    console.log("Make sure all labels exist in your repository");
-                  }
-                } else {
-                  console.log(`No new labels to add to issue #${issueNumber}`);
-                }
-                
-                console.log(`Issue #${issueNumber} has been processed as a sub-issue`);
-              } else {
-                console.log(`Issue #${issueNumber} does not have a parent issue.`);
+              // 現在のIssueに既に存在するラベルは追加しない
+              labelsToAdd = labelsToAdd.filter(label => !currentLabels.includes(label));
+              
+              if (labelsToAdd.length > 0) {
+                await github.rest.issues.addLabels({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  labels: labelsToAdd
+                });
+                console.log(`Added labels to issue #${issueNumber}: ${JSON.stringify(labelsToAdd)}`);
               }
-            } catch (error) {
-              console.error(`Error processing issue: ${error.message}`);
+              
+              console.log(`Issue #${issueNumber} has been processed as a sub-issue`);
             }
 
       - name: Add issue to project
