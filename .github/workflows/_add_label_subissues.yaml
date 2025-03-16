@@ -10,16 +10,13 @@ jobs:
     permissions:
       issues: write
       contents: read
-    defaults:
-      run:
-        working-directory: .github/workflows/scripts/
     steps:
       - name: ls
         run: |
           pwd
           ls
       - name: hello
-        run: check_subissue.sh
+        run: .github/workflows/scripts/check_subissue.sh
       - name: Check for parent issue and add labels
         uses: actions/github-script@v7
         with:
